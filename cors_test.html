@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>證交所 CORS 測試</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      font-family: -apple-system, "Microsoft JhengHei", sans-serif;
+      background: #0b0e14;
+      color: #e8eaed;
+      margin: 0;
+      padding: 16px;
+      line-height: 1.6;
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: #8a92a3; font-size: 13px; margin-bottom: 20px; }
+    .test {
+      background: #151a23;
+      border: 1px solid #262b38;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    .test h2 { font-size: 15px; margin: 0 0 4px; }
+    .url {
+      font-family: Consolas, monospace;
+      font-size: 11px;
+      color: #5b6275;
+      word-break: break-all;
+      margin-bottom: 10px;
+    }
+    .status { font-size: 14px; font-weight: 600; }
+    .pending { color: #d4a24e; }
+    .ok { color: #ff4d5e; }       /* 紅 = 成功(台股慣例) */
+    .fail { color: #2ed573; }     /* 綠 = 失敗 */
+    .detail {
+      font-family: Consolas, monospace;
+      font-size: 11px;
+      color: #8a92a3;
+      margin-top: 8px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .summary {
+      margin-top: 20px;
+      padding: 16px;
+      background: #151a23;
+      border: 1px solid #262b38;
+      border-radius: 10px;
+      font-size: 14px;
+    }
+    button {
+      background: #1f2733;
+      color: #e8eaed;
+      border: 1px solid #2f3947;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h1>證交所 CORS 測試</h1>
+  <div class="sub">
+    這個網頁會嘗試從瀏覽器直接抓取證交所各端點。紅色=成功(網頁版報價可行),綠色=被 CORS 擋(需另想辦法)。
+    把測試結果整頁截圖回報即可。
+  </div>
+
+  <div id="tests"></div>
+
+  <div class="summary" id="summary">測試進行中...</div>
+
+  <button onclick="runAll()">重新測試</button>
+
+  <script>
+    // 要測的端點:涵蓋即時個股報價、歷史收盤價、大盤即時、大盤歷史
+    const ENDPOINTS = [
+      {
+        name: '個股／ETF 即時報價(mis.twse)',
+        url: 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_0050.tw&json=1&delay=0',
+        check: (d) => Array.isArray(d.msgArray) && d.msgArray.length > 0,
+        note: '全前端版「持股最新市價」靠這支',
+      },
+      {
+        name: '個股歷史每日收盤價(STOCK_DAY)',
+        url: 'https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date=20260601&stockNo=0050',
+        check: (d) => d.stat === 'OK' && Array.isArray(d.data),
+        note: '全前端版「歷史市值曲線」靠這支',
+      },
+      {
+        name: '大盤加權指數即時(MI_INDEX)',
+        url: 'https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date=20260601&type=ALL',
+        check: (d) => Array.isArray(d.tables) || Array.isArray(d.data),
+        note: '大盤對應分析用',
+      },
+      {
+        name: '大盤加權指數歷史(MI_5MINS_HIST)',
+        url: 'https://www.twse.com.tw/indicesReport/MI_5MINS_HIST?response=json&date=20260601',
+        check: (d) => Array.isArray(d.data),
+        note: '大盤基準曲線用',
+      },
+    ];
+
+    const testsEl = document.getElementById('tests');
+    const summaryEl = document.getElementById('summary');
+
+    function render() {
+      testsEl.innerHTML = ENDPOINTS.map((e, i) => `
+        <div class="test">
+          <h2>${e.name}</h2>
+          <div class="url">${e.url}</div>
+          <div class="status pending" id="status-${i}">測試中...</div>
+          <div class="detail" id="detail-${i}"></div>
+          <div class="url" style="margin-top:6px;color:#5b6275">用途:${e.note}</div>
+        </div>
+      `).join('');
+    }
+
+    async function testOne(e, i) {
+      const statusEl = document.getElementById('status-' + i);
+      const detailEl = document.getElementById('detail-' + i);
+      try {
+        const res = await fetch(e.url, { signal: AbortSignal.timeout(10000) });
+        if (!res.ok) {
+          statusEl.className = 'status fail';
+          statusEl.textContent = '✗ 連得到但回應錯誤 HTTP ' + res.status;
+          return 'http_error';
+        }
+        const data = await res.json();
+        if (e.check(data)) {
+          statusEl.className = 'status ok';
+          statusEl.textContent = '✓ 成功!瀏覽器可以直接抓這支';
+          detailEl.textContent = '回傳資料範例:' + JSON.stringify(data).slice(0, 200) + '...';
+          return 'ok';
+        } else {
+          statusEl.className = 'status fail';
+          statusEl.textContent = '△ 抓到了但資料格式不如預期';
+          detailEl.textContent = JSON.stringify(data).slice(0, 200);
+          return 'format';
+        }
+      } catch (err) {
+        statusEl.className = 'status fail';
+        // CORS 錯誤在 fetch 裡通常是 TypeError: Failed to fetch
+        const isCors = err.name === 'TypeError' || /fetch|CORS|network/i.test(err.message);
+        statusEl.textContent = isCors ? '✗ 被擋(很可能是 CORS 限制)' : '✗ 失敗:' + err.message;
+        detailEl.textContent = err.name + ': ' + err.message;
+        return 'blocked';
+      }
+    }
+
+    async function runAll() {
+      render();
+      summaryEl.textContent = '測試進行中...';
+      const results = [];
+      for (let i = 0; i < ENDPOINTS.length; i++) {
+        results.push(await testOne(ENDPOINTS[i], i));
+      }
+      const okCount = results.filter((r) => r === 'ok').length;
+      const quoteOk = results[0] === 'ok';
+      const histOk = results[1] === 'ok';
+
+      let verdict = `${ENDPOINTS.length} 支端點中,${okCount} 支可以從瀏覽器直接抓。\n\n`;
+      if (quoteOk && histOk) {
+        verdict += '結論:即時報價與歷史價格都通,全前端版可以乾淨地用證交所,功能幾乎不打折。';
+      } else if (quoteOk || histOk) {
+        verdict += `結論:部分可用(即時報價${quoteOk ? '可' : '不可'}、歷史價格${histOk ? '可' : '不可'})。可用的直接抓,不可用的改成手動輸入或上傳 CSV。`;
+      } else {
+        verdict += '結論:報價類端點都被擋,全前端版的自動抓報價需要靠公開 CORS 代理,穩定性會打折,要重新評估。';
+      }
+      summaryEl.textContent = verdict;
+    }
+
+    runAll();
+  </script>
+</body>
+</html>
